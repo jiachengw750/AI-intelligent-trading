@@ -1,0 +1,236 @@
+version: '3.8'
+
+# AI智能交易大脑 - 开发环境Docker Compose配置
+
+services:
+  # PostgreSQL数据库 - 开发配置
+  postgres:
+    image: postgres:15-alpine
+    container_name: ai_trading_postgres_dev
+    environment:
+      POSTGRES_DB: trading_db_dev
+      POSTGRES_USER: trading_user
+      POSTGRES_PASSWORD: dev_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./deployment/sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - ai_trading_dev_network
+    restart: unless-stopped
+
+  # Redis缓存 - 开发配置
+  redis:
+    image: redis:7-alpine
+    container_name: ai_trading_redis_dev
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_dev_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - ai_trading_dev_network
+    restart: unless-stopped
+
+  # AI智能交易大脑 - API服务 (开发模式)
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: development
+    container_name: ai_trading_api_dev
+    environment:
+      SERVICE_TYPE: api
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: trading_db_dev
+      DB_USER: trading_user
+      DB_PASSWORD: dev_password
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      LOG_LEVEL: DEBUG
+      ENVIRONMENT: development
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - ai_trading_dev_network
+    restart: unless-stopped
+    command: ["python", "-m", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  # 工作进程 - 开发模式
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: development
+    container_name: ai_trading_worker_dev
+    environment:
+      SERVICE_TYPE: worker
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: trading_db_dev
+      DB_USER: trading_user
+      DB_PASSWORD: dev_password
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      LOG_LEVEL: DEBUG
+      ENVIRONMENT: development
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+      - ./data:/app/data
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - ai_trading_dev_network
+    restart: unless-stopped
+
+  # 测试服务
+  test:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: test
+    container_name: ai_trading_test
+    environment:
+      SERVICE_TYPE: test
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: trading_db_dev
+      DB_USER: trading_user
+      DB_PASSWORD: dev_password
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      LOG_LEVEL: DEBUG
+      ENVIRONMENT: test
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+      - ./data:/app/data
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - ai_trading_dev_network
+    command: ["python", "-m", "pytest", "tests/", "-v", "--cov=src"]
+
+  # 数据库管理工具
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: ai_trading_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    networks:
+      - ai_trading_dev_network
+    restart: unless-stopped
+
+  # Redis管理工具
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: ai_trading_redis_commander
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - ai_trading_dev_network
+    restart: unless-stopped
+
+  # 日志查看器
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: ai_trading_dozzle
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8080:8080"
+    networks:
+      - ai_trading_dev_network
+    restart: unless-stopped
+
+  # 代码质量检查
+  sonarqube:
+    image: sonarqube:community
+    container_name: ai_trading_sonarqube
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://postgres:5432/sonar
+      SONAR_JDBC_USERNAME: trading_user
+      SONAR_JDBC_PASSWORD: dev_password
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    ports:
+      - "9000:9000"
+    depends_on:
+      - postgres
+    networks:
+      - ai_trading_dev_network
+    restart: unless-stopped
+
+  # 文档服务
+  docs:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: development
+    container_name: ai_trading_docs
+    environment:
+      SERVICE_TYPE: docs
+    volumes:
+      - .:/app
+      - ./docs:/app/docs
+    ports:
+      - "8082:8000"
+    networks:
+      - ai_trading_dev_network
+    restart: unless-stopped
+    command: ["python", "-m", "mkdocs", "serve", "--dev-addr", "0.0.0.0:8000"]
+
+# 开发网络
+networks:
+  ai_trading_dev_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+
+# 开发数据卷
+volumes:
+  postgres_dev_data:
+    driver: local
+  redis_dev_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+  sonarqube_data:
+    driver: local
+  sonarqube_extensions:
+    driver: local
+  sonarqube_logs:
+    driver: local
